@@ -1,0 +1,304 @@
+---
+title: "New York City Motor Vehicle Accident Analysis"
+author: 'William Yu'
+output:
+  html_document:
+    code_folding: "hide"
+    df_print: paged
+  pdf_document: default
+---
+```{r, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo = TRUE)
+rm(list = ls())
+```
+
+![*pictured above: Broadway, a well-known street that also has one of the highest accident death rates in NYC.*](broadway-manhattan-nyc-photo-kate-glicksberg_mg_0481__large.jpg)
+
+## Introduction
+
+In a fast-paced environment such as New York City, accidents are bound to occur on the road. In just October alone,  [17,450 motor vehicle accidents](https://www1.nyc.gov/site/nypd/stats/traffic-data/traffic-data-collision.page) were recorded by the NYPD. 
+
+While this might come as no surprise to some, it's an important fact to mention. In 2014, [Vision Zero NYC](https://www1.nyc.gov/site/visionzero/index.page) was launched in hopes of preventing traffic-related deaths in the most populated areas of the city. But the issue still persists; hundreds die each year in motor vehicle accidents that could have easily been prevented.
+
+The purpose of this analysis is to look at some of the trends in accident and accident-related deaths over the past few years, and determine if there's sufficient evidence to gauge the relative safety in New York City. This analysis will feature a myriad of topics, including investigating the increase of accident deaths over the years, as well as taking a look into the most accident-prone areas by ZIP code in New York City, and determining their most dangerous intersections. An important question to be able to derive from this study will thus be: 
+
+#### Can we say that NYC streets are getting safer?
+
+In order to answer this question, it is important to first look at the trends of other accident related factors. Some meaningful questions to help aid in our analysis are:
+
+[1. What do the accident/death trends look like from the past few years?](#accidents-over-the-years) 
+
+[2. Where do most of these accidents occur?](#location)
+
+[3. Have accidents been going down in these areas?](#impact)
+
+To avoid being overly pedantic and hopefully bost the overall readability of this project, we will be hiding most of the code in the document. If you want to take a look, just click 'Code' on the right side of each cell. Let's begin.
+
+## Taking a look at our data
+
+The data was pulled from [NYC Open Data](https://data.cityofnewyork.us/Public-Safety/Motor-Vehicle-Collisions-Crashes/h9gi-nx95), an open source data website supported by the New York City Government. The linked dataset has every recorded case of a motor vehicle accident since 2012, and is updated frequently. We'll store this dataset as `nyc`.
+```{r}
+library(tidyverse)
+library(ggplot2)  
+library(rsconnect)
+library(dplyr)
+
+nyc <- read.csv(file='Motor_Vehicle_Collisions_-_Crashes.csv',stringsAsFactors = FALSE)
+```
+
+```{r}
+colnames(nyc)
+```
+
+The datset contains 1,617,414 entries and spans 29 columns. Above are the columns of the dataset. The names are quite self-explanatory, but in case there's any confusion, a description of the columns can be found in the NYC Open Data link.
+
+Let's begin the data munging. The dates in the dataset seem to be stored as characters, so let's create three new columns, listed as `DATE`, `YEAR`, and `MONTH` where they will be stored as date variables. There also seems to be a lack of reports from 2012, so we will not be using 2012 for our analysis. As a reminder, all the code for this document will not be shown explicitly; you must click 'Code' on the right side of each chunk to view the code.
+```{r echo=FALSE}
+nyc <- nyc %>% 
+  mutate(DATE = as.Date(CRASH.DATE, format='%m/%d/%Y')) %>% 
+  arrange(CRASH.DATE) %>% 
+  mutate(YEAR = format(DATE, "%Y")) %>%
+  mutate(MONTH = format(DATE, "%m"))
+
+nyc <- nyc %>% mutate(ON.STREET.NAME, funs(toupper))
+
+nyc <- nyc %>% filter(as.numeric(YEAR) > 2012)
+```
+
+As with many datasets, this dataset contains missing values. Let's have a look at them. We use the visna function from the `extracat` package to determine if there are any noticeable missing patterns:
+```{r fig.height=4}
+#devtools::install_github("CRAN/extracat", force=TRUE)
+library(extracat)
+visna(nyc, sort="b")
+```
+
+With so many variables, it's hard to see exactly the proportion of missing values. Rather, we notice that the most common missing pattern is, well, no missing pattern. Thus, it justifies to take subset of just the missing features.
+```{r}
+nyc_missing <- nyc %>% select(ZIP.CODE, LATITUDE, LONGITUDE, NUMBER.OF.PERSONS.INJURED
+                              ,NUMBER.OF.PERSONS.KILLED, VEHICLE.TYPE.CODE.2)
+visna(nyc_missing, sort="b")
+```
+
+Note that the highest amount of missing values are location-based variables, such as `ZIP.CODE`, `LONGITUDE`, and `LATITUDE`. Since there's no added benefit in guessing the location of these accidents, for the sake of our study, we will "drop" the observations with no location once we incorporate location-based analysis.
+
+## 1. Accidents over the years
+
+The first question to ask is, has the number of accidents gone up in the past few years? We'll plot the total number of accidents per year using the `ggplot2` package, and implement a LOESS smoother to give more of a sense of a trend.
+```{r}
+nyc_year <- nyc %>% group_by(YEAR) %>% 
+  summarise(value=n()) %>% mutate(YEAR=as.numeric(YEAR))
+p <- ggplot(nyc_year, aes(x=YEAR, y=value)) + geom_point() +
+  geom_smooth(method="loess") + theme_grey(16)
+p + labs(title="Number of Accidents in NYC from 2013-2019", x="Year", y = "# Accidents")
+```
+
+From 2013 to 2018, the number of accidents were steadily increasing. This year, however, it seems the number of accidents have reached its lowest in the past six years, with a record amount of less than 20,000. Though the year isn't over yet, it's safe to say the accident count won't be reaching back to where the rest of the years were.
+
+Great. Now what about number of deaths?
+```{r}
+nyc_deaths <- nyc %>% group_by(YEAR) %>%
+  summarise(deaths=sum(as.numeric(NUMBER.OF.PERSONS.KILLED), na.rm=TRUE))
+
+p <- ggplot(nyc_deaths, aes(x=as.numeric(YEAR), y=deaths)) + geom_point() + geom_smooth(method="loess")
+p + labs(title="Number of Deaths in NYC from 2013-2019", x="Year", y = "# Deaths") + theme_grey(16)
+```
+
+Th deaths exhibit a downward trend, with a small peak at 2017. Strangely enough, the number of accidents were increasing from 2013 to 2018 but the deaths were decreasing. Again, it seems like in 2019, the deaths have reached an all-time low.  
+
+Now let's take a look at the contributing factors to these accidents. Perhaps by identifying the highest occuring cause by frequency, we can suggest better ways to reduce the number of accidents.
+```{r}
+
+factor1 <- nyc %>% filter(!is.na(CONTRIBUTING.FACTOR.VEHICLE.1)) %>% 
+  filter(CONTRIBUTING.FACTOR.VEHICLE.1 != "Unspecified") %>% 
+  group_by(YEAR, CONTRIBUTING.FACTOR.VEHICLE.1) %>%
+  summarise(value=n()) 
+
+top10_2013 <- factor1 %>% filter(YEAR == 2013) %>% arrange(desc(value)) %>% slice(1:10)
+top10_2014 <- factor1 %>% filter(YEAR == 2014) %>% arrange(desc(value)) %>% slice(1:10)
+top10_2015 <- factor1 %>% filter(YEAR == 2015) %>% arrange(desc(value)) %>% slice(1:10)
+top10_2016 <- factor1 %>% filter(YEAR == 2016) %>% arrange(desc(value)) %>% slice(1:10)
+top10_2017 <- factor1 %>% filter(YEAR == 2017) %>% arrange(desc(value)) %>% slice(1:10)
+top10_2018 <- factor1 %>% filter(YEAR == 2018) %>% arrange(desc(value)) %>% slice(1:10)
+top10_2019 <- factor1 %>% filter(YEAR == 2019) %>% arrange(desc(value)) %>% slice(1:10)
+
+```
+
+Move the slider on the left and see how accident causes vary over the years. Hover over the plot to see the exact statistics or take subsets of the plot and see what you can get.
+```{r}
+knitr::include_app("https://willyiamyu.shinyapps.io/nyc_crash_factor/",
+                   height="700px")
+```
+
+
+Through 2013-2019, the highest contributing factor was driver inattention. This indicates that the error lies not necessarily on the road, but on the driver's habits and personal tendencies. Perhaps they didn't check their blind spots and merged onto incoming traffic. Or perhaps they misinterpreted a signal and thought it was their turn to go. Whatever it may be, we cannot just chalk up the results and determine one specific thing as the cause for all these accidents. Driver inattention is a catch-all term; within this cause lies many more sub-causes, each unique to their own scenario. 
+
+## 2. Location
+
+Now can we examine where most of these accidents have occured? We'll use `ON.STREET.NAME`, to determine which streets have had the most accidents.
+```{r}
+nyc_onstreet <- nyc %>% filter(!is.na(ON.STREET.NAME)) %>% 
+  group_by(ON.STREET.NAME) %>% summarise(value=n()) %>% arrange(desc(value))
+nyc_onstreet <- nyc_onstreet[-1,]
+
+nyc_onstreet[1:10,]
+```
+
+Broadway has had an astonishing 14,783 accidents from the past six years, with Atlantic Ave coming at a close second with 13,230. Though shocking to see such a high number, the data makes sense; Broadway is one of the busiest streets in the city, and runs entirely through Manhattan and the Bronx with a length of 33 miles. Atlantic Avenue is one of New York City's major routes, along with Queens Boulevard that is also featured in the top ten above.
+
+For a more detailed analysis, let's use the `ZIP.CODE` in our `nyc` dataset to see which neighborhoods have the most accidents. We use `choroplethrZip`, a package which conviently allows us to plot locations based on zip codes. 
+```{r}
+# devtools::install_github('arilamstein/choroplethrZip@v1.3.0')
+# download choroplethZip to get choropleth map of NY
+# by zip code
+library(choroplethrZip)
+
+nyc_zips <- nyc %>% filter(!is.na(ZIP.CODE)) %>%
+  group_by(ZIP.CODE) %>% summarise(accidents=n()) 
+
+#choroplethrzip requires columns to be named region and value 
+names(nyc_zips) <- c('region', 'value')
+nyc_zips$region <- as.character(nyc_zips$region)
+
+# to look at nyc
+nyc_fips = c(36005, 36047, 36061, 36081, 36085)
+zip_choropleth(nyc_zips,
+               state_zoom = "new york",county_zoom = nyc_fips, title= "Accidents by Zip Code in NYC", legend = "# Accidents") + coord_map()
+```
+
+Note that the NA values associated with the map are due to `choroplethrZip`'s inability to map certain zipcodes, so it will automatically map these codes to its NA regions. 
+
+From the plot, we can see that a large number of accidents occur in south Brooklyn, as well as in some areas in Queens. Midtown Manhattan also has a large number of accidents per zip code.
+
+Let's look at the ZIP codes with the highest fatalities.
+```{r}
+deaths <- nyc %>% filter(!is.na(ZIP.CODE)) %>% 
+  group_by(ZIP.CODE) %>% summarise(value=sum(NUMBER.OF.PERSONS.KILLED)) 
+
+names(deaths) <- c('region', 'value')
+deaths$region <- as.character(deaths$region)
+# to look at nyc
+nyc_fips = c(36005, 36047, 36061, 36081, 36085)
+zip_choropleth(deaths,
+               state_zoom = "new york",county_zoom = nyc_fips, title= "Deaths by Zip Code in NYC", legend = "# Deaths") + coord_map()
+```
+
+Most of south Brooklyn remains a hotspot, as well as some areas in Queens, Staten Island, and Manhattan. But can we pinpoint exactly where the zipcodes with the highest deaths are?
+
+```{r}
+# zipcode with the most deaths 
+zipcodes <- nyc %>% filter(!is.na(ZIP.CODE)) %>% 
+  group_by(ZIP.CODE) %>% summarise(value=sum(NUMBER.OF.PERSONS.KILLED)) %>%
+  select(`ZIP.CODE`, value) %>% 
+  arrange(desc(value)) 
+
+# get top 10 zipcodes
+top10_zipcodes <- zipcodes[1:10,]
+
+p <- ggplot(top10_zipcodes, aes(x=reorder(as.character(ZIP.CODE),value), y=value, color=as.character(ZIP.CODE))) + geom_point() + 
+  theme(axis.title.x=element_blank(), 
+        axis.text.x=element_blank(), 
+        axis.ticks.x=element_blank())
+
+p + labs(title="Top 10 Zip Codes in Car Accident Deaths", x="ZIP Codes", y="Deaths",
+         color="ZIP CODES")
+```
+
+ZIP code 11236 immediately jumps out, having 30+ deaths in the span of seven years. Sure enough, ZIP code 11236 corresponds to the Canarsie neighborhood in South Brooklyn.
+
+What about in 2019 alone?
+```{r}
+zipcodes_2019 <- nyc %>% filter(!is.na(ZIP.CODE)) %>% 
+  filter(as.numeric(YEAR) == 2019) %>%  group_by(ZIP.CODE) %>%
+  summarise(value=sum(NUMBER.OF.PERSONS.KILLED)) %>%
+  select(`ZIP.CODE`, value) %>% 
+  arrange(desc(value)) 
+
+top_2019 <- zipcodes_2019[1:10,]
+colnames(top_2019) <- c('ZIP code', 'Number of Deaths')
+top_2019
+```
+
+We see that zip codes 11236, 11234, 11233 find themselves again in the top ten. 11236, in particular, is at the top in both of the two sets.
+
+Let's take a look at 11236, and see what makes it so dangerous. We use `ggmap`, an extension of ggplot for spatial and geographic visualization, to plot the density hotspots. `ggmap` generates a static map from Google Maps and offers us with the functionality to put the location as a search query, without having to put actual longitude and latitude coordinates.
+
+```{r}
+library(ggmap)
+require(gridExtra)
+
+# need google maps API key to generate static map
+# go on https://console.cloud.google.com/ to register for a key
+ggmap::register_google(key="AIzaSyCRUQjKxjopaVTkU6W1qLM_PiY_DLnEzAU")
+ggmap_hide_api_key()
+
+most_crash <- nyc %>% filter(ZIP.CODE == 11236) %>%
+  filter(!is.na(LOCATION)) 
+
+p <- qmap(location = "11236", zoom = 14) +
+  ggtitle("11236 Zip Code (Brooklyn NY)") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+q <- p + geom_point(data=most_crash, aes(x=LONGITUDE, y=LATITUDE), color="lightblue", alpha=0.1) +
+  geom_density_2d(data=most_crash, aes(x=LONGITUDE, y=LATITUDE))
+
+grid.arrange(p, q, ncol=2)
+```
+
+We see that the intersections of Seaview Ave and Rockaway Pkway, Flatlands Ave and Rockaway Pkway, and the entire Remsen Ave are especially big hotspots for collision incidents. And if we do some research online, a recent article by [News 12 Brooklyn](http://brooklyn.news12.com/story/40370636/safety-changes-to-xcanarsie-road-criticized-by-residents) reports more on this issue. The article reveals that Rockaway Pkway between Seaview Ave and Flatlands Ave "is one of the ten worst corridors in pedestrian safety". Curiously enough, the article also states that many drivers are criticizing the changes that have been brought upon with the Vision Zero Initiative. Though new turning lanes have been added in hopes of reducing driver confusion, it's only added to the mess. Drivers in Canarsie have been spotted driving on the wrong side of the street, and intersections have become a "free-for-all" situation. This, in tandem with the already-existing problems of the intersections, help explain why the high number of fatal accidents seems to persist in this area.
+
+A relevant tangent to this topic is to ask: as a Columbia University student, how safe is it to walk around campus? Let's perform the same analysis that was done above for the area surrounding Columbia: 
+```{r}
+require(gridExtra)
+
+columbia <- nyc %>% filter(ZIP.CODE == 10025 | ZIP.CODE == 10027) %>%
+  filter(!is.na(LOCATION)) 
+
+p <- qmap(location = "columbia university", zoom = 14) +
+  ggtitle("Accident Probabilities around CU") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+q <- p + geom_point(data=columbia, aes(x=LONGITUDE, y=LATITUDE), color="lightblue", alpha=0.1) +
+  geom_density_2d(data=columbia, aes(x=LONGITUDE, y=LATITUDE))
+
+grid.arrange(p, q, ncol=2)
+
+```
+
+The density plot reveals the intersections of Broadway and 96th, Amsterdam and 96th, and Harlem 125th St and Adam Clayton Powell Jr Ave are the most prone to accidents. It comes to no surprise that Broadway, which we had determined earlier as the most dangerous street in NYC, is a hotspot in this area.
+
+## 3. Impact
+
+Now let's go back to the Canarsie neighborhood. As News 12 stated, local drivers were not satisfied with the changes made by Vision Zero on Rockaway Parkway. But is there evidence to undermine these changes? Rather, have the number of accidents gone up on Rockaway since the implementation of Vision Zero? 
+
+We'll filter only the results where `ON.STREET.NAME` is Rockaway Parkway.
+```{r}
+rockaway <- nyc %>% filter(str_detect(ON.STREET.NAME, "ROCKAWAY")) %>%
+  group_by(YEAR) %>% summarise(value=n())
+
+p <-ggplot(rockaway, aes(x=as.numeric(YEAR), y=value)) +geom_point()+geom_smooth(method='loess')
+p + labs(title="Number of Accidents by Year on Rockaway", x="Year", y="# Accidents")
+```
+
+The number of accidents on Rockaway have decreased significantly in 2019. Let's look at another big street in New York City, Atlantic Avenue, to verify our findings.
+```{r}
+atlantic <- nyc %>% filter(str_detect(ON.STREET.NAME, "ATLANTIC AVE")) %>%
+  group_by(YEAR) %>% summarise(value=n())
+
+p <- ggplot(atlantic, aes(x=as.numeric(YEAR), y=value)) +geom_point()+geom_smooth(method='loess')
+p + labs(title="Number of Accidents by Year on Atlantic Ave", x="Year", y="# Accidents")
+```
+
+We can see that the number of accidents in two of New York City's most accident-prone streets, Rockaway and Atlantic, have gone down considerably since the introduction of Vision Zero in 2014. And if you look at almost any street in New York City, they all exhibit the same trend; streets are meeting all-time-lows of number of accidents this year.
+
+## Conclusion
+
+Through analyzing the data, we were able to find out that:
+
+1. The data supports the idea that the number of accidents are going down
+2. The areas that have the highest number of accidents tend to be big streets and intersections
+3. Vision Zero does seem to have a significant impact in reducing accidents 
+
+Whereas it may be very unlikely to eradicate all motor vehicle related deaths as outlined in Vision Zero, important steps in reducing such accidents have been taken, and the evidence clearly shows that the methods are working. Ultimately, however, the core of the data analysis conducted in this project lies human behavior. Accidents occur due to various factors, and just as no two people drive the same, no two accidents occur in the same way. Thus we must err from making blanket statements that seek to provide a generalization for the entire population. We can only *suggest* results that the data is inclined towards. Whether that's truly the case we don't know. So unless there is a surefire way to assess the metric of safety, such as fully automated self-driving cars (Elon please), can we really say that the streets are getting safer? Probably not. But this data analysis sure does come close in indciating that they have.
+
+If you wish to replicate this project, you can find all work located [here](https://github.com/willyiamyu/nyc_crash).
+
