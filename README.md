@@ -1,2 +1,2 @@
 # nyc_crash
-Data analysis project on car accidents in NYC using R and Shiny
+Data Analysis Project on Vehicle Collision Data in NYC using R and RShiny
